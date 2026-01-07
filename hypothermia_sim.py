@@ -1,220 +1,274 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 
 # ==========================================
-# 1. 页面配置与样式
+# 1. 页面配置与学术风格定义 (Rigorous Style)
 # ==========================================
 st.set_page_config(
-    page_title="户外运动失温仿真教学系统",
-    page_icon="🏔️",
+    page_title="户外极端环境人体热力学仿真实验系统",
+    page_icon="❄️",
     layout="wide"
 )
 
-# 自定义一些CSS让界面更像教学软件
+# 注入严谨风格的 CSS
 st.markdown("""
 <style>
-    .big-font { font-size:20px !important; color: #333; }
-    .highlight { background-color: #f0f2f6; padding: 10px; border-radius: 10px; }
-    .danger { color: #ff4b4b; font-weight: bold; }
-    .safe { color: #09ab3b; font-weight: bold; }
+    /* 全局字体与背景 */
+    .stApp {
+        background-color: #F8F9FA;
+        font-family: "Times New Roman", "SimSun", serif; /* 衬线体显庄重 */
+    }
+    
+    /* 标题样式 */
+    h1, h2, h3 {
+        color: #0F172A;
+        font-weight: 700;
+    }
+    
+    /* 学术卡片容器 */
+    .academic-card {
+        background-color: white;
+        padding: 20px;
+        border: 1px solid #E2E8F0;
+        border-radius: 4px; /* 直角圆角，显严肃 */
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        margin-bottom: 20px;
+    }
+    
+    /* 数据指标样式 */
+    .metric-label { font-size: 14px; color: #64748B; text-transform: uppercase; letter-spacing: 1px; }
+    .metric-value { font-size: 28px; font-weight: bold; color: #1E293B; }
+    
+    /* 警报状态颜色 */
+    .status-normal { color: #15803D; font-weight: bold; }
+    .status-warning { color: #B45309; font-weight: bold; }
+    .status-danger { color: #B91C1C; font-weight: bold; }
+
+    /* 调整侧边栏 */
+    section[data-testid="stSidebar"] {
+        background-color: #FFFFFF;
+        border-right: 1px solid #E2E8F0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏔️ 珠峰攀登环境：人体体温调节与失温仿真模型")
-st.markdown("本系统用于模拟**户外极端环境**下，不同**气象条件**、**运动强度**及**着装方案**对人体核心体温的影响。")
-
 # ==========================================
-# 2. 侧边栏：交互控制台 (输入层)
+# 2. 核心数学模型封装 (Physics Engine)
 # ==========================================
-st.sidebar.header("⚙️ 实验参数设置")
-
-# --- A. 环境设置 ---
-st.sidebar.subheader("1. 环境物理场")
-env_temp = st.sidebar.slider("环境温度 (°C)", -50, 10, -20, help="珠峰顶端常年在-30°C左右")
-wind_speed = st.sidebar.slider("风速 (km/h)", 0, 100, 30, help="风速越大，风寒效应越明显")
-
-# --- B. 运动行为 ---
-st.sidebar.subheader("2. 运动状态")
-activity_level = st.sidebar.selectbox(
-    "当前动作",
-    options=["静止/受伤等待", "轻度活动 (慢走)", "中度活动 (徒步)", "高强度 (攀冰/冲顶)"],
-    index=2
-)
-# 将选项映射为 METs (代谢当量)
-met_map = {
-    "静止/受伤等待": 1.0,
-    "轻度活动 (慢走)": 2.5,
-    "中度活动 (徒步)": 4.5,
-    "高强度 (攀冰/冲顶)": 8.0
-}
-mets = met_map[activity_level]
-
-# --- C. 装备系统 ---
-st.sidebar.subheader("3. 服装与装备")
-clothing_type = st.sidebar.selectbox(
-    "穿着方案",
-    options=["单薄衣物 (0.5 Clo)", "常规冲锋衣套装 (1.5 Clo)", "专业高山羽绒连体服 (3.5 Clo)"],
-    index=1
-)
-clo_map = {
-    "单薄衣物 (0.5 Clo)": 0.5,
-    "常规冲锋衣套装 (1.5 Clo)": 1.5,
-    "专业高山羽绒连体服 (3.5 Clo)": 3.5
-}
-base_clo = clo_map[clothing_type]
-
-# 核心交互变量：潮湿
-is_wet = st.sidebar.checkbox("⚠️ 警告：内层衣物是否湿透？", value=False, help="汗湿或雪水浸湿会严重降低保温能力")
-
-# ==========================================
-# 3. 模型计算核心 (逻辑层)
-# ==========================================
-
-def calculate_simulation(t_env, wind, met_val, clo_val, wet_status):
-    # 1. 计算风寒温度 (Osczevski-Bluestein公式)
-    # 这是一个气象学公式，计算"感觉有多冷"
-    if wind < 5:
-        wind_chill = t_env
+def run_simulation(env_temp, wind_speed, met_val, clo_val, is_wet, duration_mins=120):
+    """
+    输入：环境参数
+    输出：120分钟内的体温变化列表 (List), 最终状态 (Dict)
+    """
+    # 1. 风寒计算
+    if wind_speed < 5:
+        wch = env_temp
     else:
-        # v 需要转换为 m/s 用于部分计算，这里风寒公式用 km/h 适配
-        wind_chill = 13.12 + 0.6215 * t_env - 11.37 * (wind ** 0.16) + 0.3965 * t_env * (wind ** 0.16)
+        wch = 13.12 + 0.6215 * env_temp - 11.37 * (wind_speed ** 0.16) + 0.3965 * env_temp * (wind_speed ** 0.16)
     
-    # 2. 修正服装热阻
-    # 如果湿透，棉/羽绒热阻仅剩 30%-40%
-    real_clo = clo_val * 0.35 if wet_status else clo_val
-    # 转换为标准热阻单位 (m2·K/W)
-    r_clothing = real_clo * 0.155 
-    r_air = 0.1 / (1 + 0.5 * (wind / 10)) # 风越大，空气层热阻越小
-    r_total = r_clothing + r_air
-
-    # 3. 产热 (W/m2)
-    heat_production = met_val * 58.15 
+    # 2. 热阻修正
+    real_clo = clo_val * 0.35 if is_wet else clo_val
+    r_total = real_clo * 0.155 + 0.1 / (1 + 0.5 * (wind_speed / 10))
     
-    # 4. 散热 (W/m2)
-    # 简化物理模型：热流 = 温差 / 热阻
-    # 假设核心体温初始 37度
-    heat_loss = (37.0 - wind_chill) / r_total
-    
-    # 5. 净热量平衡
-    net_heat = heat_production - heat_loss
-    
-    return wind_chill, net_heat, real_clo
+    # 3. 迭代计算体温
+    temps = []
+    curr_t = 37.0
+    body_mass = 70.0
+    cp = 3470.0
+    area = 1.8
+    heat_production = met_val * 58.15 # W/m2
 
-# 运行单次计算用于仪表盘
-wc, net_q, actual_clo = calculate_simulation(env_temp, wind_speed, mets, base_clo, is_wet)
-
-# ==========================================
-# 4. 可视化输出 (UI层)
-# ==========================================
-
-# --- 顶部仪表盘 ---
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("环境温度", f"{env_temp} °C")
-col2.metric("体感温度 (风寒)", f"{wc:.1f} °C", delta=f"{wc - env_temp:.1f} °C", delta_color="inverse")
-col3.metric("实际保暖值 (Clo)", f"{actual_clo:.2f}", delta="-65%" if is_wet else "正常", delta_color="inverse")
-
-# 判断热平衡状态
-status_text = ""
-status_color = ""
-if net_q > 0:
-    status_text = "体温维持/上升 (安全)"
-    status_color = "safe"
-else:
-    status_text = "⚠️ 体温正在流失 (危险)"
-    status_color = "danger"
-
-col4.markdown(f"#### 状态: <span class='{status_color}'>{status_text}</span>", unsafe_allow_html=True)
-
-
-# --- 核心：动态时序模拟 ---
-st.markdown("---")
-st.subheader("📉 核心体温变化预测 (未来2小时)")
-
-# 模拟算法：基于简单热容量模型
-# Q = cmΔT -> ΔT = Q / cm
-simulation_minutes = 120
-time_x = np.arange(0, simulation_minutes)
-temp_y = []
-current_core_temp = 37.0
-body_mass = 70 # kg
-specific_heat = 3470 # J/(kg·C)
-surface_area = 1.8 # m2
-
-# 记录失温阶段
-hypothermia_onset = None # 开始失温时间
-
-for t in time_x:
-    # 每一分钟计算一次新的体温
-    # 这里的 net_q 是 W/m2 (焦耳/秒/平方米)
-    # 每分钟总热量变化 (Joules) = net_q * Area * 60s
-    total_joules_change = net_q * surface_area * 60
-    
-    # 温度变化量
-    dt = total_joules_change / (body_mass * specific_heat)
-    
-    # 加上生理调节反馈（简化版）：
-    # 如果体温降低，会寒战(Shivering)，产热增加，但这里为了教学展示"如果不干预会怎样"，暂不加寒战补偿，
-    # 这样更能体现物理环境的残酷性。
-    
-    current_core_temp += dt
-    
-    # 物理限制：尸体温度不会低于环境温度
-    if current_core_temp < env_temp:
-        current_core_temp = env_temp
+    for _ in range(duration_mins + 1):
+        # 散热计算
+        heat_loss = (curr_t - wch) / r_total
+        # 净热流
+        net_flow = heat_production - heat_loss
+        # 温变
+        dt = (net_flow * area * 60) / (body_mass * cp)
         
-    temp_y.append(current_core_temp)
-    
-    # 记录第一次跌破35度的时间
-    if current_core_temp < 35.0 and hypothermia_onset is None:
-        hypothermia_onset = t
+        curr_t += dt
+        # 物理限制
+        if curr_t < env_temp: curr_t = env_temp
+        
+        temps.append(curr_t)
+        
+    return temps, wch, real_clo
 
-# 绘图
-fig, ax = plt.subplots(figsize=(10, 4))
-ax.plot(time_x, temp_y, color='#ff4b4b', linewidth=2, label='核心体温')
-
-# 绘制安全警戒线
-ax.axhline(y=35, color='blue', linestyle='--', alpha=0.5, label='轻度失温界限 (35°C)')
-ax.axhline(y=32, color='purple', linestyle='--', alpha=0.5, label='重度失温界限 (32°C)')
-
-ax.set_ylim(bottom=min(25, min(temp_y)-1), top=38)
-ax.set_xlabel("暴露时间 (分钟)")
-ax.set_ylabel("核心体温 (°C)")
-ax.grid(True, alpha=0.3)
-ax.legend()
-
-st.pyplot(fig)
-
-# --- 教学反馈区 ---
-c1, c2 = st.columns([2, 1])
-
-with c1:
-    st.info("💡 **教学观察点**：尝试勾选侧边栏的 **'内层衣物湿透'**，观察体温曲线斜率的变化。你会发现潮湿对失温的加速作用比单纯的低温更可怕。")
-
-with c2:
-    if hypothermia_onset:
-        st.error(f"🛑 **危险预警**\n\n以当前状态，预计 **{hypothermia_onset} 分钟** 后进入失温状态 (Core Temp < 35°C)。\n\n**建议操作：**\n1. 增加衣物\n2. 寻找避风处\n3. 更换干衣")
+# ==========================================
+# 3. 辅助函数：生成动态 SVG 人体
+# ==========================================
+def get_human_svg(temp_val, label, clo_desc):
+    """
+    根据体温生成不同颜色的 SVG 人体轮廓
+    """
+    # 颜色映射逻辑：37度红 -> 35度蓝 -> 30度黑紫
+    if temp_val >= 36.5:
+        fill_color = "#E11D48" # 红色 (正常)
+    elif temp_val >= 35.0:
+        fill_color = "#2563EB" # 蓝色 (冷应激)
+    elif temp_val >= 32.0:
+        fill_color = "#4F46E5" # 深蓝 (轻度失温)
     else:
-        st.success("✅ **安全评估**\n\n在当前环境下，2小时内体温能维持在安全范围内。")
+        fill_color = "#1E1B4B" # 黑紫 (重度失温)
 
-# --- 底部：人体热力图概念演示 ---
-st.markdown("---")
-st.subheader("🧖‍♂️ 人体热分布 (概念可视化)")
-
-# 根据最终温度决定显示哪张图（这里用色块模拟，实际开发可用图片）
-final_temp = temp_y[-1]
-color_hex = "#ff0000" # 正常红
-if final_temp < 32: color_hex = "#2b0057" # 深度紫
-elif final_temp < 35: color_hex = "#0066ff" # 失温蓝
-elif final_temp < 36.5: color_hex = "#ffaa00" # 发冷橙
-
-st.markdown(f"""
-<div style="display:flex; justify-content:center; align-items:center; flex-direction:column;">
-    <div style="width: 200px; height: 300px; background: linear-gradient(to bottom, {color_hex}, {color_hex}AA); 
-                border-radius: 100px; display:flex; align-items:center; justify-content:center; color:white; font-weight:bold; box-shadow: 0 0 20px {color_hex}; transition: all 0.5s;">
-        人体核心
+    svg_code = f"""
+    <div style="text-align: center; margin-bottom: 20px;">
+        <svg viewBox="0 0 100 200" width="120" height="240">
+            <!-- 简单的人体轮廓路径 -->
+            <path d="M50,10 C60,10 65,18 65,28 C65,38 60,45 50,45 C40,45 35,38 35,28 C35,18 40,10 50,10 Z 
+                     M30,50 L70,50 L75,100 L85,90 L95,100 L80,140 L80,140 L65,110 L65,190 L55,190 L55,140 L45,140 L45,190 L35,190 L35,110 L20,140 L5,100 L15,90 L25,100 L30,50 Z" 
+                  fill="{fill_color}" stroke="#334155" stroke-width="2"/>
+        </svg>
+        <div style="margin-top: 10px; font-weight: bold; color: #334155;">{label}</div>
+        <div style="font-size: 12px; color: #64748B;">{clo_desc}</div>
+        <div style="font-size: 20px; font-weight: 700; color: {fill_color}; margin-top:5px;">{temp_val:.1f} °C</div>
     </div>
-    <p style="margin-top:10px; color:#666;">当前体表/核心颜色示意</p>
-</div>
-""", unsafe_allow_html=True)
+    """
+    return svg_code
+
+# ==========================================
+# 4. 侧边栏：环境控制 (Input)
+# ==========================================
+st.sidebar.title("🔬 实验条件设定")
+st.sidebar.markdown("---")
+
+st.sidebar.subheader("1. 环境物理场 (Environment)")
+env_temp = st.sidebar.slider("环境温度 / Ambient Temp (°C)", -50, 10, -20)
+wind_speed = st.sidebar.slider("风速 / Wind Speed (km/h)", 0, 100, 25)
+
+st.sidebar.subheader("2. 行为状态 (Activity)")
+met_option = st.sidebar.selectbox(
+    "运动代谢率 / Metabolic Rate",
+    [1.0, 3.0, 6.0, 8.0],
+    format_func=lambda x: f"{x} METs - " + {1.0:"静止/受伤", 3.0:"慢走", 6.0:"快速徒步", 8.0:"高强度攀登"}[x]
+)
+
+st.sidebar.subheader("3. 危险变量 (Risk Factor)")
+is_wet = st.sidebar.checkbox("模拟衣物湿透 (Wet Clothing)", value=False, help="模拟汗湿或落水情况，热阻将衰减65%")
+
+st.sidebar.markdown("---")
+st.sidebar.info("本模型基于 *Osczevski-Bluestein* 风寒指数模型与人体热平衡方程构建。\n\n适用于《户外运动安全》课程教学演示。")
+
+# ==========================================
+# 5. 主界面：对比实验区
+# ==========================================
+
+st.title("🏔️ 户外运动失温伤害虚拟仿真实验")
+st.markdown("**实验目的：** 研究在同一极端环境下，不同着装方案（热阻 Clo）对人体核心体温维持能力的差异性分析。")
+
+# 计算三个对照组
+# 组1：轻装 (T恤/薄外套) - 0.5 Clo
+temps_1, wch, _ = run_simulation(env_temp, wind_speed, met_option, 0.5, is_wet)
+# 组2：标准 (冲锋衣套装) - 1.5 Clo
+temps_2, _, _ = run_simulation(env_temp, wind_speed, met_option, 1.5, is_wet)
+# 组3：专业 (高山连体羽绒) - 3.5 Clo
+temps_3, _, _ = run_simulation(env_temp, wind_speed, met_option, 3.5, is_wet)
+
+# --- 模块一：实时状态对比 (Virtual Avatars) ---
+st.markdown("### 1. 120分钟后人体热力学状态模拟")
+st.markdown("通过数值模拟生成的三组虚拟人体模型，颜色代表核心体温分布（红=正常，蓝=失温）。")
+
+with st.container():
+    # 使用列布局显示三个“人”
+    col_a, col_b, col_c = st.columns(3)
+    
+    with col_a:
+        st.markdown("<div class='academic-card'>", unsafe_allow_html=True)
+        st.markdown(get_human_svg(temps_1[-1], "实验组 A", "轻薄衣物 (0.5 Clo)"), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_b:
+        st.markdown("<div class='academic-card'>", unsafe_allow_html=True)
+        st.markdown(get_human_svg(temps_2[-1], "实验组 B", "标准户外装 (1.5 Clo)"), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_c:
+        st.markdown("<div class='academic-card'>", unsafe_allow_html=True)
+        st.markdown(get_human_svg(temps_3[-1], "实验组 C", "专业高山向导 (3.5 Clo)"), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+# --- 模块二：数据可视化 (Academic Chart) ---
+st.markdown("### 2. 核心体温时变曲线 (Time-Temperature Analysis)")
+
+# 构建 Plotly 图表
+fig = go.Figure()
+
+# 绘制三条曲线
+fig.add_trace(go.Scatter(
+    x=np.arange(121), y=temps_1, 
+    mode='lines', name='组A: 0.5 Clo',
+    line=dict(color='#EF4444', width=2, dash='dash') # 红色虚线，表示危险
+))
+fig.add_trace(go.Scatter(
+    x=np.arange(121), y=temps_2, 
+    mode='lines', name='组B: 1.5 Clo',
+    line=dict(color='#F59E0B', width=3) # 橙色
+))
+fig.add_trace(go.Scatter(
+    x=np.arange(121), y=temps_3, 
+    mode='lines', name='组C: 3.5 Clo',
+    line=dict(color='#10B981', width=3) # 绿色
+))
+
+# 绘制安全阈值区域
+fig.add_hrect(y0=35, y1=38, fillcolor="green", opacity=0.05, line_width=0, annotation_text="安全区", annotation_position="top left")
+fig.add_hrect(y0=32, y1=35, fillcolor="orange", opacity=0.05, line_width=0, annotation_text="轻度失温区", annotation_position="top left")
+fig.add_hrect(y0=20, y1=32, fillcolor="red", opacity=0.05, line_width=0, annotation_text="重度失温区", annotation_position="top left")
+
+# 设置严格的学术风格布局
+fig.update_layout(
+    title=dict(text=f'环境温度 {env_temp}°C / 风速 {wind_speed} km/h 条件下的体温演变', font=dict(size=16)),
+    xaxis=dict(
+        title='暴露时长 (Exposure Time) [min]', # 明确的X轴标签
+        showgrid=True,
+        gridcolor='#E2E8F0',
+        zeroline=True,
+    ),
+    yaxis=dict(
+        title='核心体温 (Core Temp) [°C]', # 明确的Y轴标签
+        showgrid=True,
+        gridcolor='#E2E8F0',
+        range=[min(28, min(temps_1)-1), 38]
+    ),
+    legend=dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.02,
+        xanchor="right",
+        x=1
+    ),
+    plot_bgcolor='white', # 白底，学术规范
+    height=500,
+    margin=dict(l=60, r=40, t=80, b=60) # 增加边距，防止标签被切
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# --- 模块三：结论与分析 ---
+st.markdown("### 3. 实验数据与分析结论")
+result_col1, result_col2 = st.columns([1, 2])
+
+with result_col1:
+    st.markdown("""
+    <div class='academic-card'>
+        <div class='metric-label'>当前体感温度 (Wind Chill)</div>
+        <div class='metric-value' style='color:#3B82F6'>%.1f °C</div>
+    </div>
+    """ % wch, unsafe_allow_html=True)
+
+with result_col2:
+    # 动态生成结论
+    conclusion = ""
+    if temps_3[-1] > 36.0:
+        conclusion += "✅ **专业装备有效性验证：** 在当前环境下，高热阻装备（3.5 Clo）能有效维持体温平衡。<br>"
+    if temps_2[-1] < 35.0:
+        conclusion += "⚠️ **常规装备局限性：** 普通户外装（1.5 Clo）不足以应对该极端环境，需在60分钟内寻找避难所。<br>"
+    if temps_1[-1] < 32.0:
+        conclusion += "☠️ **失温风险预警：** 轻装组在当前风寒条件下将迅速进入重度失温状态，有生命危险。"
+    
+    if is_wet:
+        conclusion += "<br><br><strong>💧 潮湿效应显著：</strong> 实验数据显示，潮湿导致衣物热阻效能降低约 65%，加速了热量流失。"
+
+    st.info(conclusion)
